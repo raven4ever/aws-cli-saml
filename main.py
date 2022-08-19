@@ -3,6 +3,7 @@
 import base64
 import configparser
 import getpass
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -28,28 +29,35 @@ outputformat = 'yaml'
 
 # awsconfigfile: The file where this script will store the temp
 # credentials under the saml profile
-awsconfigfile = '/.aws/credentials'
+awsconfigfile = '.aws/credentials'
 
 # SSL certificate verification: Whether or not strict certificate
 # verification is done, False should only be used for dev/test
 sslverification = True
 
 # idpentryurl: The initial url that starts the authentication process.
-# https://sts.company.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices
-idpentryurl = ''
+idpentryurl = 'https://sts.company.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices'
 
+domain_name = 'AD_DOMAIN'
 ##########################################################################
 
 current_user = getpass.getuser()
 
 # Get the federated credentials from the user
-username = questionary.text("AD Username:", default=current_user).ask()
-password = questionary.password("AD Password:").ask()
+questionary.print(f'!!! Make sure the username includes the domain name as well (eg. {domain_name}\myuser) !!!',
+                  style='bold fg:ansired')
 
-region = questionary.text("Default region:", default=region).ask()
-outputformat = questionary.select("Default output:",
+username = questionary.text('AD Username:', default=current_user).ask()
+password = questionary.password('AD Password:').ask()
+
+region = questionary.text('Default region:', default=region).ask()
+outputformat = questionary.select('Default output:',
                                   choices=['yaml', 'json'],
                                   default=outputformat, use_shortcuts=True, use_arrow_keys=True).ask()
+
+# add domain name if not provided
+if domain_name not in username:
+    username = domain_name + '\\' + username
 
 # Initiate session handler
 session = requests.Session()
@@ -70,13 +78,13 @@ payload = {}
 for inputtag in formsoup.find_all(re.compile('(INPUT|input)')):
     name = inputtag.get('name', '')
     value = inputtag.get('value', '')
-    if "user" in name.lower():
+    if 'user' in name.lower():
         # Make an educated guess that this is the right field for the username
         payload[name] = username
-    elif "email" in name.lower():
+    elif 'email' in name.lower():
         # Some IdPs also label the username field as 'email'
         payload[name] = username
-    elif "pass" in name.lower():
+    elif 'pass' in name.lower():
         # Make an educated guess that this is the right field for the password
         payload[name] = password
     else:
@@ -95,9 +103,9 @@ for inputtag in formsoup.find_all(re.compile('(INPUT|input)')):
 for inputtag in formsoup.find_all(re.compile('(FORM|form)')):
     action = inputtag.get('action')
     loginid = inputtag.get('id')
-    if (action and loginid == "loginForm"):
+    if (action and loginid == 'loginForm'):
         parsedurl = urlparse(idpentryurl)
-        idpauthformsubmiturl = parsedurl.scheme + "://" + parsedurl.netloc + action
+        idpauthformsubmiturl = parsedurl.scheme + '://' + parsedurl.netloc + action
 
 # Performs the submission of the IdP login form with the above post data
 response = session.post(
@@ -122,8 +130,8 @@ for inputtag in soup.find_all('input'):
 
 # Better error handling is required for production use.
 if (assertion == ''):
-    # TODO: Insert valid error checking/handling
-    print('Response did not contain a valid SAML assertion')
+    questionary.print('Response did not contain a valid SAML assertion! Try checking your AD credentials.',
+                      style='bold fg:ansired')
     sys.exit(0)
 
 # Parse the returned assertion and extract the authorized roles
@@ -154,10 +162,11 @@ if len(awsroles) > 0:
         principal_arn = awsrole.split(',')[1]
         role_principal_map[role_arn] = principal_arn
 else:
-    print('It seems you can\'t assume any role at this moment. Please contact your AWS account administrator for access!')
+    questionary.print('It seems you can\'t assume any role at this moment. Please contact your AWS account administrator for access!',
+                      style='bold fg:ansired')
     sys.exit(0)
 
-role_arn = questionary.select("What role do you want to assume?",
+role_arn = questionary.select('What role do you want to assume?',
                               choices=role_principal_map, use_shortcuts=True, use_arrow_keys=True).ask()
 principal_arn = role_principal_map[role_arn]
 
@@ -175,12 +184,14 @@ token_session_expire = token['Credentials']['Expiration']
 token_session_expire = token_session_expire.astimezone(tz.tzlocal())
 
 # Write the AWS STS token into the AWS credential file
-home = expanduser("~")
-filename = home + awsconfigfile
+path_to_aws_creds = os.path.join(expanduser('~'), awsconfigfile)
+
+if not os.path.exists(path_to_aws_creds):
+    os.makedirs(os.path.dirname(path_to_aws_creds))
 
 # Read in the existing config file
 config = configparser.RawConfigParser()
-config.read(filename)
+config.read(path_to_aws_creds)
 
 # Put the credentials into a saml specific section instead of clobbering
 # the default credentials
@@ -194,23 +205,26 @@ config.set('default', 'aws_secret_access_key', token_secret_key)
 config.set('default', 'aws_session_token', token_session_token)
 
 # Write the updated config file
-with open(filename, 'w+') as configfile:
+with open(path_to_aws_creds, 'w+') as configfile:
     config.write(configfile)
 
 # Give the user some basic info as to what has just happened
 print('\n')
-print('!' * 46)
-print(
-    f'Your new access key pair has been stored in the AWS configuration file {filename} under the saml profile.')
-print(
-    f'The credentials will expire at {token_session_expire.strftime("%a %b %d %H:%M:%S %Z %Y")}!')
-print('After this time, you may safely rerun this script to refresh your access key pair.')
-print('To use this credential, call the AWS CLI with the --profile option (e.g. aws --profile saml s3 ls).')
-print('!' * 46)
+questionary.print('!' * 46, style='fg:ansibrightgreen')
+questionary.print(
+    f'Your new access credentials have been stored in the AWS configuration file {path_to_aws_creds} under the default profile.', style='fg:ansibrightgreen')
+questionary.print(
+    f'The credentials will expire at {token_session_expire.strftime("%a %b %d %H:%M:%S %Z %Y")}!', style='fg:ansibrightgreen')
+questionary.print(
+    'After this time, you may safely rerun this script to refresh them.', style='fg:ansibrightgreen')
+questionary.print(
+    'To use this credential, simply call the AWS CLI commands (e.g. aws s3 ls).', style='fg:ansibrightgreen')
+questionary.print('!' * 46, style='fg:ansibrightgreen')
 print('\n')
 
 # Use the AWS STS token to list all of the S3 buckets
-print(f'Listing all buckets in the {region}...')
+questionary.print(
+    f'Listing all buckets in the {region}...', style='fg:ansibrightgreen')
 session = boto3.session.Session(region_name=region,
                                 aws_access_key_id=token_access_key_id,
                                 aws_secret_access_key=token_secret_key,
