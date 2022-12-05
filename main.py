@@ -36,7 +36,7 @@ aws_config_file_path = '.aws/credentials'
 ssl_verification = True
 
 # idpentryurl: The initial url that starts the authentication process.
-idp_entry_url = 'https://sts.lseg.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices'
+idp_entry_url = 'https://sts.company.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices'
 
 domain_name = 'LSEG'
 
