@@ -25,20 +25,24 @@ region = 'eu-west-1'
 
 # output format: The AWS CLI output format that will be configured in the
 # saml profile (affects subsequent CLI calls)
-outputformat = 'yaml'
+output_format = 'yaml'
 
 # awsconfigfile: The file where this script will store the temp
 # credentials under the saml profile
-awsconfigfile = '.aws/credentials'
+aws_config_file_path = '.aws/credentials'
 
 # SSL certificate verification: Whether or not strict certificate
 # verification is done, False should only be used for dev/test
-sslverification = True
+ssl_verification = True
 
 # idpentryurl: The initial url that starts the authentication process.
-idpentryurl = 'https://sts.company.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices'
+idp_entry_url = 'https://sts.lseg.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices'
 
-domain_name = 'AD_DOMAIN'
+domain_name = 'LSEG'
+
+# AWS profile where the credentials will be saved
+profile_name = 'default'
+
 ##########################################################################
 
 current_user = getpass.getuser()
@@ -51,9 +55,11 @@ username = questionary.text('AD Username:', default=current_user).ask()
 password = questionary.password('AD Password:').ask()
 
 region = questionary.text('Default region:', default=region).ask()
-outputformat = questionary.select('Default output:',
-                                  choices=['yaml', 'json'],
-                                  default=outputformat, use_shortcuts=True, use_arrow_keys=True).ask()
+output_format = questionary.select('Default output:',
+                                   choices=['yaml', 'json'],
+                                   default=output_format, use_shortcuts=True, use_arrow_keys=True).ask()
+
+profile_name = questionary.text('AWS profile:', default=profile_name).ask()
 
 # add domain name if not provided
 if domain_name not in username:
@@ -65,7 +71,7 @@ session = requests.Session()
 # Programmatically get the SAML assertion
 # Opens the initial IdP url and follows all of the HTTP302 redirects, and
 # gets the resulting login page
-formresponse = session.get(idpentryurl, verify=sslverification)
+formresponse = session.get(idp_entry_url, verify=ssl_verification)
 
 # Capture the idpauthformsubmiturl, which is the final url after all the 302s
 idpauthformsubmiturl = formresponse.url
@@ -104,12 +110,12 @@ for inputtag in formsoup.find_all(re.compile('(FORM|form)')):
     action = inputtag.get('action')
     loginid = inputtag.get('id')
     if (action and loginid == 'loginForm'):
-        parsedurl = urlparse(idpentryurl)
+        parsedurl = urlparse(idp_entry_url)
         idpauthformsubmiturl = parsedurl.scheme + '://' + parsedurl.netloc + action
 
 # Performs the submission of the IdP login form with the above post data
 response = session.post(
-    idpauthformsubmiturl, data=payload, verify=sslverification)
+    idpauthformsubmiturl, data=payload, verify=ssl_verification)
 
 # Overwrite and delete the credential variables, just for safety
 username = '##############################################'
@@ -184,7 +190,7 @@ token_session_expire = token['Credentials']['Expiration']
 token_session_expire = token_session_expire.astimezone(tz.tzlocal())
 
 # Write the AWS STS token into the AWS credential file
-path_to_aws_creds = os.path.join(expanduser('~'), awsconfigfile)
+path_to_aws_creds = os.path.join(expanduser('~'), aws_config_file_path)
 
 if not os.path.exists(path_to_aws_creds):
     os.makedirs(os.path.dirname(path_to_aws_creds))
@@ -195,14 +201,14 @@ config.read(path_to_aws_creds)
 
 # Put the credentials into a saml specific section instead of clobbering
 # the default credentials
-if not config.has_section('default'):
-    config.add_section('default')
+if not config.has_section(profile_name):
+    config.add_section(profile_name)
 
-config.set('default', 'output', outputformat)
-config.set('default', 'region', region)
-config.set('default', 'aws_access_key_id', token_access_key_id)
-config.set('default', 'aws_secret_access_key', token_secret_key)
-config.set('default', 'aws_session_token', token_session_token)
+config.set(profile_name, 'output', output_format)
+config.set(profile_name, 'region', region)
+config.set(profile_name, 'aws_access_key_id', token_access_key_id)
+config.set(profile_name, 'aws_secret_access_key', token_secret_key)
+config.set(profile_name, 'aws_session_token', token_session_token)
 
 # Write the updated config file
 with open(path_to_aws_creds, 'w+') as configfile:
